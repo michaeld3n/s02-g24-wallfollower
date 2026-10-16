@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="370" viewBox="0 0 1050 370" role="img" aria-labelledby="title desc">
+<title id="title">Manual ROS Node Design Diagram</title>
+<desc id="desc">The Gazebo ROS bridge sends laser ranges and simulation time to WallFollowerNode, which sends requested motion back and reports state to an external observer.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8" fill="black"/></marker></defs>
+<rect width="1050" height="370" fill="white"/>
+<g font-family="sans-serif" fill="#111" text-anchor="middle">
+<text x="525" y="32" font-size="22">ROS Node Design — standard Gazebo setup</text>
+<g fill="white" stroke="black" stroke-width="1.5"><ellipse cx="190" cy="180" rx="175" ry="45"/><ellipse cx="575" cy="180" rx="110" ry="45"/><ellipse cx="920" cy="180" rx="110" ry="45"/></g>
+<g font-size="17"><text x="190" y="186">ros_gz_bridge::RosGzBridge</text><text x="575" y="186">WallFollowerNode</text><text x="920" y="186">rclpy.node.Node</text></g>
+<g fill="none" stroke="black" stroke-width="1.5" marker-end="url(#arrow)"><path d="M320 150 Q400 105 490 150"/><path d="M270 140 C360 50 480 50 550 135"/><path d="M490 210 Q400 275 320 210"/><path d="M685 180 L807 180"/></g>
+<g font-size="15"><text x="405" y="122">laser_ranges</text><text x="410" y="63">simulation_time</text><text x="405" y="270">requested_motion</text><text x="747" y="164">follower_state</text></g>
+<g font-size="14" fill="#444"><text x="525" y="315">Ellipses represent node instances; arrows label the meaning of published data.</text><text x="525" y="340">Observer is external (e.g. topic echo). Start/stop is a service, documented separately.</text></g>
+</g></svg>

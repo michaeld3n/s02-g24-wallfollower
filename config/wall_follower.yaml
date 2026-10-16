@@ -1,0 +1,11 @@
+/**:
+  ros__parameters:
+    wall_distance: 0.25
+    forward_speed: 0.10
+    turn_speed: 0.65
+    front_stop_distance: 0.25
+    front_resume_distance: 0.35
+    wall_lost_distance: 0.90
+    distance_gain: 2.0
+    heading_gain: 1.2
+    scan_timeout: 1.0

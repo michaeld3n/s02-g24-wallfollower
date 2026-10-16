@@ -1,0 +1,20 @@
+@startuml
+' Manual design, following Task 5. See README for topics, types and service details.
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor White
+  BorderColor Black
+  FontSize 13
+}
+skinparam ArrowFontSize 12
+skinparam nodesep 40
+skinparam ranksep 55
+left to right direction
+usecase "ros_gz_bridge::RosGzBridge" as Bridge
+usecase "WallFollowerNode" as Follower
+usecase "rclpy.node.Node" as Observer
+Bridge --> Follower : laser_ranges
+Bridge --> Follower : simulation_time
+Follower --> Bridge : requested_motion
+Follower --> Observer : follower_state
+@enduml

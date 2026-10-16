@@ -1,0 +1,20 @@
+@startuml
+' Manual simplified UML: deliberately no fields or methods.
+skinparam classAttributeIconSize 0
+skinparam style strictuml
+skinparam shadowing false
+hide empty members
+class "rclcpp::Node" as Node
+class WallFollowerNode
+class ScanReader
+class Controller
+class "Controller::Settings" as Settings
+class "Controller::Command" as Command
+WallFollowerNode --|> Node
+WallFollowerNode *-- ScanReader
+WallFollowerNode *-- Controller
+Controller *-- Settings
+Controller --> ScanReader : reads
+Controller ..> Command : returns
+WallFollowerNode ..> Command : publishes
+@enduml
