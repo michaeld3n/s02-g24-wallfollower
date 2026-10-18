@@ -109,7 +109,7 @@ colcon test
 colcon test-result
 ```
 
-The isolated [integration test](test/test_integration.py) publishes handmade scans and checks velocity, state, start/stop and scan handling. It needs ROS, but no robot or Gazebo. ROS integration and Gazebo validation are still pending; see [validation notes](docs/VALIDATION.md).
+The isolated [integration test](test/test_integration.py) checks velocity output for a right wall, a front obstacle and open space. It needs ROS, but no robot or Gazebo. The ROS integration test and Gazebo run have not yet been verified.
 
 ## Diagrams
 
