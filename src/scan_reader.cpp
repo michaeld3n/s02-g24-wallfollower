@@ -1,9 +1,10 @@
-// MTRX3760 2026 Project 2: Package Deal
-// File: scan_reader.cpp
-// Author(s): Cody, royce, Marz, Paekinator; OpenAI Codex (AI-assisted adaptation)
+// Turning laser rays into sector distances
 //
-// Description: Angle-based minimum/median sector extraction.
-// Provenance: Adapted from Project1 CScanReader in ../project1_repo.
+// The reader groups rays by angle and finds the front minimum and side
+// medians. It ignores unusable individual returns and uses the sensor's
+// maximum range when every ray in a sector is NaN. Missing coverage and
+// malformed scans remain invalid.
+
 #include "wall_follower/scan_reader.hpp"
 
 #include <algorithm>
@@ -74,12 +75,13 @@ ScanReader::Sector ScanReader::ReadSector(
     {
         std::sort(valid_ranges.begin(), valid_ranges.end());
         result.Valid = true;
+        // Side sectors use the upper middle reading when the count is even.
         result.Distance = use_minimum ? valid_ranges.front()
             : valid_ranges[valid_ranges.size() / 2];
     }
     else if (beam_count > 0 && nan_count == beam_count)
     {
-        // Apply the all-NaN policy only where the scan actually covers the sector.
+        // All NaNs count as maximum range; a sector with no rays stays unknown.
         result.Valid = true;
         result.Distance = range_max;
     }

@@ -1,8 +1,8 @@
-// MTRX3760 2026 Project 2: Package Deal
-// File: main.cpp
-// Author(s): OpenAI Codex (AI-assisted adaptation)
+// Starting and stopping the wall follower
 //
-// Uses Project 1's separate ROS context pattern to send zero velocity on Ctrl+C.
+// This program creates the ROS node and runs its callbacks. A separate ROS
+// context lets the node send a final zero velocity command when Ctrl+C is
+// pressed, before its publishers are shut down.
 
 #include "wall_follower/wall_follower_node.hpp"
 #include <memory>

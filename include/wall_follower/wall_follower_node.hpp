@@ -1,11 +1,11 @@
-// MTRX3760 2026 Project 2: Package Deal
-// File: wall_follower_node.hpp
-// Author(s): OpenAI Codex (AI-assisted implementation)
+// The ROS interface for the wall follower
 //
-// ROS adapter owning the scan reader, steering controller and runtime interfaces.
-// Project 1 lineage: Copyright 2019 ROBOTIS CO., LTD.
-// Original authors: Taehun Lim (Darby), Ryan Shim.
-// Licensed under the Apache License, Version 2.0; see LICENSE and NOTICE.
+// This node owns the scan reader and controller. Its callbacks handle scans,
+// start/stop requests and regular output updates. The publishers send the
+// requested movement and current state to the rest of the ROS system.
+
+// Copyright 2019 ROBOTIS CO., LTD.
+// Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 #ifndef WALL_FOLLOWER_NODE_HPP
 #define WALL_FOLLOWER_NODE_HPP
@@ -22,22 +22,21 @@
 
 namespace wall_follower
 {
-// Connects scan, velocity and state topics with a runtime enable service.
 class WallFollowerNode : public rclcpp::Node
 {
 public:
     explicit WallFollowerNode(const rclcpp::NodeOptions& options);
 
-    // Dispatch callbacks until shutdown, then request a final zero command.
+    // Run the callbacks, then send zero velocity before shutting down.
     void Run();
 
 private:
     Controller::Settings ReadSettings();
     double ReadDouble(const std::string& name, double value);
     bool ReadBool(const std::string& name, bool value);
-    // A scan can arrive while disabled; only post-enable input may drive motion.
+    // Scans can arrive while stopped, but starting requires another scan.
     void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr message);
-    // Reset retained motion on value changes and publish the new state immediately.
+    // Clear saved movement when start/stop changes and update the output immediately.
     void SetEnabled(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                     std::shared_ptr<std_srvs::srv::SetBool::Response> response);
     void Update();
@@ -46,7 +45,7 @@ private:
     ScanReader mScan;
     Controller mController;
     bool mEnabled;
-    // At least one scan has arrived since the latest enable transition.
+    // True after a scan arrives; cleared whenever start/stop changes.
     bool mHaveScan = false;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr mScanSubscription;
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr mVelocity;

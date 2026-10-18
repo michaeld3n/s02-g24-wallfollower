@@ -30,14 +30,11 @@ install(TARGETS wall_follower_core EXPORT wall_follower_targets
 install(TARGETS wall_follower_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config docs DESTINATION share/${PROJECT_NAME})
-install(FILES README.md LICENSE NOTICE DESTINATION share/${PROJECT_NAME})
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
 ament_export_targets(wall_follower_targets HAS_LIBRARY_TARGET)
 
 if(BUILD_TESTING)
   enable_testing()
-  add_executable(test_core test/test_core.cpp)
-  target_link_libraries(test_core wall_follower_core)
-  add_test(NAME wall_follower_core COMMAND test_core)
   find_package(ament_cmake_ros REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
   # Official Jazzy tutorial runner assigns a separate ROS domain to this test.

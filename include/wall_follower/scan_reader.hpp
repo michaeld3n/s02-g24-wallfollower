@@ -1,9 +1,9 @@
-// MTRX3760 2026 Project 2: Package Deal
-// File: scan_reader.hpp
-// Author(s): Cody, royce, Marz, Paekinator; OpenAI Codex (AI-assisted adaptation)
+// Reading the front and right side of a laser scan
 //
-// Description: Extract front and right-wall sectors from a laser scan.
-// Provenance: Adapted from Project1 CScanReader in ../project1_repo.
+// This class stores the front, right and front-right sector distances.
+// Each update replaces the previous readings, and the controller can check
+// whether all three sectors are usable before calculating movement.
+
 #ifndef WALL_FOLLOWER_SCAN_READER_HPP
 #define WALL_FOLLOWER_SCAN_READER_HPP
 
@@ -11,21 +11,19 @@
 
 namespace wall_follower
 {
-// Reduces laser rays to front, right and front-right sector distances.
 class ScanReader
 {
 public:
     // Angles are radians counterclockwise from forward; distances are metres.
-    // Positive infinity and an entirely NaN sector denote range_max.
+    // Positive infinity and an entirely NaN sector are treated as range_max.
     // Missing coverage and other unusable sectors remain invalid.
-    // Every update replaces all previous sector readings.
     void Update(const std::vector<float>& ranges, double angle_min,
                 double angle_increment, double range_min, double range_max);
     // True only when all three required sectors have usable distances.
     bool HasValidReadings() const;
     bool HasReceivedScan() const;
 
-    // Distances are usable for steering only when HasValidReadings is true.
+    // Check HasValidReadings before using these distances to steer.
     double FrontDistance() const;
     double RightDistance() const;
     double FrontRightDistance() const;

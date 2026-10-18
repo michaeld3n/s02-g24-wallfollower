@@ -1,12 +1,11 @@
-// MTRX3760 2026 Project 2: Package Deal
-// File: wall_follower_node.cpp
-// Author(s): OpenAI Codex (AI-assisted implementation)
+// Connecting the wall follower to ROS
 //
-// Connects the Project 1-derived controller to ROS, with start/stop and state output.
-// ROS lifecycle pattern adapted from Project 1; original attribution retained below.
+// The node receives laser scans, passes them to the reader and publishes
+// stamped velocity commands and state messages. A service enables or stops
+// movement, while a timer updates the output every 50 ms.
+
 // Copyright 2019 ROBOTIS CO., LTD.
-// Original authors: Taehun Lim (Darby), Ryan Shim.
-// Licensed under the Apache License, Version 2.0; see LICENSE and NOTICE.
+// Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 #include "wall_follower/wall_follower_node.hpp"
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
@@ -65,7 +64,7 @@ Controller::Settings WallFollowerNode::ReadSettings()
 
 void WallFollowerNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr message)
 {
-    // Header timestamps do not gate command generation.
+    // Use the scan contents without checking its timestamp.
     mScan.Update(message->ranges, message->angle_min, message->angle_increment,
                  message->range_min, message->range_max);
     mHaveScan = true;
@@ -84,7 +83,7 @@ void WallFollowerNode::SetEnabled(
     {
         if (mEnabled != request->data)
         {
-            // Clear retained motion and require a post-transition scan.
+            // Forget old movement and wait for another scan after start/stop changes.
             mController.Reset();
             mHaveScan = false;
         }

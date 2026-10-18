@@ -5,9 +5,7 @@ Originally recorded 16 October 2026; behaviour and local checks updated 18 Octob
 ## Completed locally on macOS
 
 - Source baseline verified: Project 1 local HEAD and remote HEAD both `05df1f5b89db609be2e087675ce7abb3d40a67cf`.
-- Portable C++ core: `bash scripts/test_core.sh` passed **5,069 checks in six groups**. This exercises the actual scan reader and controller, not a mock of them.
-- Core checks include steering signs, heading correction, front-obstacle hysteresis, all-NaN substitution, mixed-NaN filtering, retained velocities and obstacle memory across missing/invalid scans, positive infinity, angular conventions/resolutions, reset behaviour, invalid settings and geometric wall convergence.
-- AddressSanitizer and UndefinedBehaviorSanitizer core execution passed again for this update on 18 October 2026.
+- Historical validation before removal: the standalone C++ suite passed **5,069 checks in six groups**, including scan filtering, steering, retained commands, reset and geometric wall convergence. AddressSanitizer and UndefinedBehaviorSanitizer execution also passed on 18 October 2026. That suite and its shell runner were subsequently removed at the user's request; they are not runnable from the current checkout. The package now ships only the ROS integration test.
 - Python launch/test files parse successfully. This is syntax validation, not execution against ROS.
 - Package manifest and SVG diagrams parse as XML.
 - Both manual SVG diagrams were rendered and visually inspected in Chromium during the original implementation. The updated class diagram was rendered locally and visually inspected on 18 October 2026. Editable PlantUML sources accompany them; PlantUML compilation itself has not been run here.

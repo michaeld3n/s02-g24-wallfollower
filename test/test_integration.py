@@ -44,7 +44,7 @@ def generate_test_description():
 
 
 class TestWallFollower(unittest.TestCase):
-    """Each expectation needs fresh state and command messages after its stimulus."""
+    """Check commands and states received after each test input."""
 
     def setUp(self):
         self.context = Context()
@@ -123,7 +123,7 @@ class TestWallFollower(unittest.TestCase):
         ranges = [math.inf] * 360
         for index in range(360):
             degrees = index - 180
-            # Give sector-based controllers several valid samples per direction.
+            # Put several readings in each sector so the minimum and median are tested.
             if wall is not None and -100 <= degrees <= -35:
                 ranges[index] = wall / -math.sin(math.radians(degrees))
             if abs(degrees) <= 20:
@@ -151,7 +151,7 @@ class TestWallFollower(unittest.TestCase):
                 future.cancel()
 
     def expect(self, endpoint, states, predicate, *, scan=None, timeout=5.0):
-        """Stream at 10 Hz and require a stable result across multiple timer ticks."""
+        """Send scans at 10 Hz and wait for the expected output to stay steady."""
         states = {states} if isinstance(states, str) else set(states)
         endpoint['command'] = None
         endpoint['state'] = None
@@ -178,7 +178,7 @@ class TestWallFollower(unittest.TestCase):
         self.assert_stays_command(endpoint, state, self.stopped, duration=duration, scan=scan)
 
     def assert_stays_command(self, endpoint, state, predicate, *, duration=0.7, scan=None):
-        """Discard transition messages, then check every command over the interval."""
+        """Wait for the expected output, then check every command for a set time."""
         self.expect(endpoint, state, predicate, scan=scan)
         endpoint['commands'].clear()
         endpoint['states'].clear()
@@ -277,14 +277,14 @@ class TestWallFollower(unittest.TestCase):
                 self.expect(endpoint, 'turning_left', turning, scan=self.scan(front=0.30))
                 self.expect(endpoint, 'following_wall', straight, scan=wall_scan)
 
-                # Header timestamps do not gate movement.
+                # Old or future timestamps should not change how a scan is handled.
                 old_scan = self.scan()
                 old_scan.header.stamp.sec = 1
                 self.expect(endpoint, 'following_wall', straight, scan=old_scan)
                 future_scan = self.scan(stamp=self.node.get_clock().now().to_msg())
                 future_scan.header.stamp.sec += 3600
                 self.expect(endpoint, 'following_wall', straight, scan=future_scan)
-                # Silence longer than the former default must preserve command and state.
+                # Commands and state should stay the same when scans stop arriving.
                 self.assert_stays_command(endpoint, 'following_wall', straight, duration=1.3)
                 self.expect(endpoint, 'turning_left', turning, scan=self.scan(front=0.15))
 
