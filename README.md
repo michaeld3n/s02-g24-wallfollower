@@ -33,7 +33,7 @@ The development repository is https://github.com/michaeld3n/s02-g24-wallfollower
 
 A **node** is a running ROS program. A **topic** is a named stream of messages: the laser sends scans and the controller sends velocity commands. A **service** is a request with a reply: here, a boolean means start or stop. A **parameter** is a configuration value. A **launch file** starts programs with chosen parameters and names. A **workspace** holds source packages and their compiled results; `colcon` builds it and `ament_cmake` connects this C++ package to ROS's build system.
 
-This package contains one node and a ROS-independent core. `ScanReader` turns many laser rays into three distances. `Controller` turns those distances into a speed and turn rate. `WallFollowerNode` handles ROS messages, parameters, the service, and the watchdog. Composition means the node owns a reader and a controller; inheritance means the node extends `rclcpp::Node`.
+This package contains one node and a ROS-independent core. `ScanReader` turns many laser rays into three distances. `Controller` turns those distances into a speed and turn rate. `WallFollowerNode` handles ROS messages, parameters, the service, and the publishing timer. Composition means the node owns a reader and a controller; inheritance means the node extends `rclcpp::Node`.
 
 The [node design diagram](docs/node_design.svg) shows external connections. Its editable source is [node_design.puml](docs/node_design.puml). The [simplified class diagram](docs/class_diagram.svg) shows class relationships; its editable source is [class_diagram.puml](docs/class_diagram.puml). The class diagram intentionally omits attributes and methods; the inventory below supplies those details in prose.
 
@@ -65,7 +65,7 @@ Both diagrams are manually designed. The `.svg` files are viewable companions to
 | State and hysteresis | State is the controller's current mode. A small remembered front-obstacle flag prevents repeated switching around the same distance. |
 | Feedback / proportional control | Each new measurement changes steering in proportion to distance and heading error. Gains control how strongly it corrects. This is not a full PID controller. |
 | Saturation | Limit the requested turn to a maximum. The robot also slows forward motion during stronger corrections. |
-| Time and watchdog | ROS time may come from Gazebo; a separate monotonic clock measures how long scans have stopped arriving. A watchdog simply checks that elapsed time. |
+| ROS time and wall timer | ROS time may come from Gazebo and stamps outgoing commands; a wall timer keeps publishing every 50 ms even when simulation time pauses. |
 | Unit vs integration test | A core test calls the steering code directly. An integration test launches the real ROS node and sends messages through its actual interfaces. |
 
 Metres measure distance, metres/second measure forward speed, and radians/second measure turning speed. One full circle is approximately 6.283 radians. The robot turns by requesting different effective wheel speeds through its existing base driver; this package does not drive motor hardware directly.
@@ -82,7 +82,7 @@ Angles are measured counterclockwise from forward. Forward is 0°, right is −9
 
 For an even number of valid side readings, the upper middle value is selected, not the average of the two middle values. Each scan replaces all three regions; old distances cannot silently fill missing regions.
 
-Finite returns within the inclusive `range_min`–`range_max` interval are usable. Positive infinity means no return within sensor range and is treated as `range_max`. NaN, negative infinity, and finite out-of-range readings are discarded. A region with no usable readings is unknown, not clear. A numerical zero is accepted only if the declared minimum range permits it.
+Finite returns within the inclusive `range_min`–`range_max` interval are usable. Positive infinity means no return within sensor range and is treated as `range_max`. NaNs are ignored when usable readings remain. If every beam in a region is NaN, that region is valid at `range_max`. This is a controller fallback policy, not a measured obstacle distance. Negative infinity and finite out-of-range readings are discarded. A region with no beams, or no usable readings that is not entirely NaN, remains unknown. The raw `/scan` message is not modified. A numerical zero is accepted only if the declared minimum range permits it.
 
 Empty ranges, nonfinite angle metadata, zero angle increment, invalid range bounds, or an overflowing final beam angle invalidate the scan. Range bounds must be finite, `range_min >= 0`, and `range_max > range_min`. `angle_max`, intensity values, scan duration, and the input header timestamp are not used in the control calculation. No transform lookup corrects sensor mounting: the incoming angular convention must already match the robot's forward/right directions.
 
@@ -102,28 +102,27 @@ The heading correction is omitted when the diagonal distance is at least `wall_l
 
 **Hysteresis** means different thresholds start and finish a turn: a front distance strictly below `front_stop_distance` starts blocking; once blocked, turning continues until the front is at least `front_resume_distance`. This prevents rapid switching near one threshold. Exactly the stop threshold does not newly trigger blocking; exactly the resume threshold releases it.
 
-If the right distance is strictly greater than `wall_lost_distance`, the robot searches by moving at `forward_speed` and turning right at half `turn_speed`. This is a local reactive search, not a path planner or a guarantee that it will find a wall in an arbitrary world. With all rays at positive infinity it searches, because that represents clear observed space.
+If the right distance is strictly greater than `wall_lost_distance`, the robot searches by moving at `forward_speed` and turning right at half `turn_speed`. This is a local reactive search, not a path planner or a guarantee that it will find a wall in an arbitrary world. With all rays at positive infinity, or all sectors entirely NaN, it normally searches because their distances become `range_max` (assuming this exceeds the steering thresholds).
 
 ### State messages and edge cases
 
 | State string | Meaning and commanded behaviour |
 | --- | --- |
-| `invalid_configuration` | Invalid numerical settings or timeout; zero velocity, even if disabled |
+| `invalid_configuration` | Invalid numerical settings; zero velocity, even if disabled |
 | `disabled` | Start permission is off; zero velocity continues to be published |
-| `waiting_for_scan` | Enabled but no post-transition scan, or receipt watchdog expired; zero velocity |
-| `invalid_scan` | A scan arrived but front information is unusable; zero velocity |
-| `turning_left` | Front obstacle latched by hysteresis; zero forward speed and positive `turn_speed` |
-| `partial_scan` | Front is usable but a side region is missing; cautious recovery described below |
-| `searching_wall` | Complete scan but right wall beyond the lost threshold; forward/right curve |
-| `following_wall` | Complete usable scan and wall within the lost threshold; distance/heading steering |
+| `waiting_for_scan` | Enabled but no post-transition scan has arrived; zero velocity |
+| `invalid_scan` | A scan arrived but at least one required sector is unusable; repeat the last saved velocity, or zero if none has been saved since reset |
+| `turning_left` | Usable scan with front obstacle latched by hysteresis; zero forward speed and positive `turn_speed` |
+| `searching_wall` | Usable scan but right wall beyond the lost threshold; forward/right curve |
+| `following_wall` | Usable scan and wall within the lost threshold; distance/heading steering |
 
-The node checks configuration, disabled status, and freshness before it asks the controller to steer. Within the controller, a missing/invalid front stops motion; a blocked front turns left before considering incomplete side information.
+The node checks configuration, disabled status, and whether a post-transition scan has arrived before it asks the controller to steer. The controller requires all three sectors to be usable. An unknown sector rejects the whole scan: it reports `invalid_scan` while retaining both the previous velocity command and front-obstacle latch. Even a known front obstacle in an otherwise unusable scan does not replace the saved command. There is no partial-scan state, special partial-scan steering, or reduced-speed cap.
 
-With a clear front but incomplete sides, linear motion is capped at **0.01 m/s**. If a valid right wall remains within the lost threshold, distance-only following is used. Otherwise it curves right to search, except that a known front-right obstacle below `front_stop_distance` with no usable right reading causes a stationary left turn at half `turn_speed`. Partial scans are therefore not always a full stop. Invalid front readings reset the front-obstacle latch; so do enable transitions and watchdog expiry.
+Enable/disable transitions clear the saved velocity and obstacle latch. After enabling, the node waits at zero for a new scan. If that scan is unusable, it reports `invalid_scan` and continues at zero until a usable scan arrives. Repeating the existing enable value does not reset the controller.
 
-**Freshness is based on receipt time, not the scan header.** Each scan callback records a monotonic/steady-clock arrival time. More than `scan_timeout` seconds of silence produces `waiting_for_scan` and zero commands. The default is 1.0 second. Old, zero, future, or reset scan header stamps do not by themselves fail a scan. This replaces Project 1's header-time error behaviour and avoids repeated timestamp error messages. The watchdog remains active; zero or negative timeout is invalid, not an off switch. A continually arriving malformed stream produces `invalid_scan`, not a receipt timeout.
+**There is no scan timeout.** If scans stop arriving, the node keeps publishing commands based on its last scan and its state does not change just because of silence. An unusable stream keeps publishing the last saved command with `invalid_scan`. Motion can therefore continue indefinitely without usable new sensor input, until the service disables the controller or a usable scan changes the command. The `scan_timeout` parameter has been removed.
 
-The output loop uses a wall timer every 50 ms (nominally 20 Hz), even if simulated time pauses. A stopped simulator may therefore trigger the receipt watchdog. Incoming scans allow automatic recovery while enabled. The output stamped command uses ROS time, so `use_sim_time` must still match the simulator even though the watchdog uses a separate clock.
+The output loop uses a wall timer every 50 ms (nominally 20 Hz), even if simulated time pauses. Pausing Gazebo does not stop command publication; disable the controller before pausing if zero commands are required. Old, zero, future, or reset input header stamps do not gate movement. Outgoing stamped commands use ROS time, so `use_sim_time` must still match the simulator.
 
 Normal Ctrl+C requests a final zero command and briefly waits for reliable acknowledgements before shutting down its separate ROS context. This is a best-effort shutdown action, not a guaranteed emergency stop for process crashes, power loss, or network failure. A real base should have its own command timeout.
 
@@ -288,14 +287,9 @@ ros2 topic echo /clock --once
 ros2 launch wall_follower wall_follower.launch.py use_sim_time:=true
 ```
 
-Inspect `/cmd_vel` before the controller starts to identify the robot subscriber's type. The controller defaults to `geometry_msgs/msg/TwistStamped`. If the robot actually subscribes to `geometry_msgs/msg/Twist`, use this alternative launch instead:
+Inspect `/cmd_vel` before the controller starts and confirm the robot subscribes to `geometry_msgs/msg/TwistStamped`. This is the controller's only velocity message type.
 
-```bash
-ros2 launch wall_follower wall_follower.launch.py \
-  use_sim_time:=true use_stamped_cmd_vel:=false
-```
-
-Only run one of these controller launches. `wall_follower.launch.py` starts **only the controller**; it neither starts a simulator nor launches hardware drivers. It starts disabled, so the robot should remain still until explicitly enabled.
+Run one controller instance. `wall_follower.launch.py` starts **only the controller**; it neither starts a simulator nor launches hardware drivers. It starts disabled, so the robot should remain still until explicitly enabled.
 
 ### Terminal C: monitor, enable, and stop
 
@@ -319,9 +313,9 @@ Ctrl+C stops the last `echo` command only; it does not disable the controller. T
 ros2 service call /set_enabled std_srvs/srv/SetBool '{data: false}'
 ```
 
-An enable transition deliberately discards pre-transition scans. It stays at zero in `waiting_for_scan` until a new scan arrives, then chooses the appropriate control state. A successful service response means the request was accepted, not that a wall has been found or the robot is already moving.
+An enable transition deliberately discards pre-transition scans and clears the saved velocity and obstacle latch. It stays at zero in `waiting_for_scan` until a new scan arrives, then chooses the appropriate control state; an unusable first scan reports `invalid_scan` and retains zero until usable input arrives. A successful service response means the request was accepted, not that a wall has been found or the robot is already moving.
 
-Expected observations to verify: a wall within reach gives `following_wall`; a nearby obstacle ahead gives `turning_left`; open space gives `searching_wall`; stopping scan delivery gives `waiting_for_scan` after the timeout. Stop through the service before ending the controller and simulator with Ctrl+C. Record actual observations in the validation document.
+Expected observations to verify: a wall within reach gives `following_wall`; a nearby obstacle ahead gives `turning_left`; open space gives `searching_wall`; stopping scan delivery retains the last command and state; unusable scans retain the last command with `invalid_scan`. Stop through the service before ending the controller and simulator with Ctrl+C. Record actual observations in the validation document.
 
 ## Interfaces and quality of service
 
@@ -332,13 +326,13 @@ All four application names are **relative**, so a namespace or remapping can rel
 | Direction | Relative/default resolved name | ROS interface | QoS / timing |
 | --- | --- | --- | --- |
 | Subscribe | `scan` → `/scan` | `sensor_msgs/msg/LaserScan` | `rclcpp::SensorDataQoS`: keep-last 5, best effort, volatile |
-| Publish | `cmd_vel` → `/cmd_vel` | `geometry_msgs/msg/TwistStamped` by default; `Twist` if configured | Keep-last 10, reliable, volatile; nominal 20 Hz |
+| Publish | `cmd_vel` → `/cmd_vel` | `geometry_msgs/msg/TwistStamped` | Keep-last 10, reliable, volatile; nominal 20 Hz |
 | Publish | `state` → `/state` | `std_msgs/msg/String` | Keep-last 1, reliable, transient local; nominal 20 Hz, including unchanged states |
 | Service server | `set_enabled` → `/set_enabled` | `std_srvs/srv/SetBool` | Standard ROS service QoS: reliable, volatile, keep-last 10 |
 
-Only `linear.x` (m/s) and `angular.z` (rad/s) are commanded; other velocity components are zero. In stamped mode the `Twist` is inside `.twist`, `header.stamp` is the node's current ROS time, and `header.frame_id` is `base_link`. In plain mode there is no header. The node creates only one command publisher type per run; there is no automatic format conversion.
+Only `twist.linear.x` (m/s) and `twist.angular.z` (rad/s) are commanded; other velocity components are zero. Every command is a `TwistStamped`: `header.stamp` is the node's current ROS time and `header.frame_id` is `base_link`.
 
-`SetBool` request field `data` is true to enable and false to disable; response fields are `success` and explanatory `message`. Actual value changes reset the controller and require a subsequent scan. Repeating the existing value is accepted without resetting freshness. A successful enable replies `Enabled`; a successful disable replies `Disabled; zero velocity sent`. Disable invokes an immediate zero-output update. Enabling invalid settings is rejected; disabling is accepted, but the diagnostic state remains `invalid_configuration` because that has priority.
+`SetBool` request field `data` is true to enable and false to disable; response fields are `success` and explanatory `message`. Actual value changes reset the controller and require a subsequent scan. Repeating the existing value is accepted without clearing the saved command or requiring another scan. A successful enable replies `Enabled`; a successful disable replies `Disabled; zero velocity sent`. Disable invokes an immediate zero-output update. Enabling invalid settings is rejected; disabling is accepted, but the diagnostic state remains `invalid_configuration` because that has priority.
 
 ROS also supplies normal parameter services, parameter events, and logging (`/rosout`); `use_sim_time=true` enables ROS clock input from `/clock`. These are framework interfaces, not extra application control topics. This package publishes no odometry, transforms, map, path, or navigation action and subscribes to no pose or camera feed.
 
@@ -365,7 +359,7 @@ Absolute remap targets beginning with `/` ignore the namespace. Relative targets
 
 ## Parameters and launch arguments
 
-These are startup settings. All package-declared parameters are **read-only after startup**, including `start_enabled`, the message-type switch, and the watchdog. Use the service for runtime start/stop. The ROS-provided `use_sim_time` parameter is not marked read-only by this package; choose its correct value at launch.
+These are startup settings. All package-declared parameters are **read-only after startup**, including `start_enabled`. Use the service for runtime start/stop. The ROS-provided `use_sim_time` parameter is not marked read-only by this package; choose its correct value at launch.
 
 | Parameter | Default | Unit/type | Meaning and validity |
 | --- | --- | --- | --- |
@@ -377,21 +371,18 @@ These are startup settings. All package-declared parameters are **read-only afte
 | `wall_lost_distance` | `0.90` | m, double | Search when right distance exceeds this; greater than wall distance |
 | `distance_gain` | `2.0` | steering gain, double | Distance-error correction; greater than zero |
 | `heading_gain` | `1.2` | steering gain, double | Wall-heading correction; zero or greater |
-| `scan_timeout` | `1.0` | seconds, double | Maximum scan receipt silence; finite and greater than zero |
 | `start_enabled` | `false` | bool | Initial permission to drive; still requires a scan |
-| `use_stamped_cmd_vel` | `true` | bool | Select `TwistStamped`; false selects `Twist` |
 | `use_sim_time` | `false` | bool | Use `/clock` for ROS time; set true for Gazebo |
 
 All eight steering numbers must be finite as well as satisfying their listed relationships. Numerically invalid configuration yields zero commands and `invalid_configuration`; it cannot be corrected in place because the settings are read-only. A parameter supplied with the wrong ROS type may instead fail declaration/startup. Use decimal YAML values for doubles and actual booleans for booleans. There is no configurable control frequency, sector width, side selection, frame ID, or recovery-speed parameter.
 
-The shipped [YAML](config/wall_follower.yaml) contains the nine numerical defaults. Its `/**` wildcard lets them apply when the node is namespaced. The three booleans are explicitly supplied by launch arguments **after** the YAML and therefore override values in a custom parameter file.
+The shipped [YAML](config/wall_follower.yaml) contains the eight numerical defaults. Its `/**` wildcard lets them apply when the node is namespaced. The two booleans are explicitly supplied by launch arguments **after** the YAML and therefore override values in a custom parameter file.
 
 | Launch argument | Default | Purpose |
 | --- | --- | --- |
 | `params_file` | Installed `config/wall_follower.yaml` | Load a YAML parameter file |
 | `use_sim_time` | `false` | Override the corresponding bool parameter |
 | `start_enabled` | `false` | Override the corresponding bool parameter |
-| `use_stamped_cmd_vel` | `true` | Override the corresponding bool parameter |
 | `namespace` | Empty string | Node and relative endpoint namespace |
 | `scan_topic` | `scan` | Scan subscription remap target |
 | `cmd_vel_topic` | `cmd_vel` | Velocity publication remap target |
@@ -411,14 +402,14 @@ To tune, disable, terminate, edit YAML, and relaunch. Numerical parameter names 
 ```bash
 ros2 run wall_follower wall_follower_node --ros-args \
   --params-file ~/wall_follower_ws/src/s02-g24-wallfollower/config/wall_follower.yaml \
-  -p use_sim_time:=true -p start_enabled:=false -p use_stamped_cmd_vel:=true
+  -p use_sim_time:=true -p start_enabled:=false
 ```
 
 Do not run this alongside the launch-based instance. Inspect configuration without changing it:
 
 ```bash
 ros2 param list /wall_follower
-ros2 param get /wall_follower scan_timeout
+ros2 param get /wall_follower wall_distance
 ros2 param describe /wall_follower wall_distance
 ```
 
@@ -446,11 +437,11 @@ colcon test --packages-select wall_follower --event-handlers console_direct+
 colcon test-result --verbose
 ```
 
-`CMakeLists.txt` registers the C++ test and the Python launch test when `BUILD_TESTING` is enabled (the usual development configuration). The integration test uses `ament_cmake_ros`'s `run_test_isolated.py` runner to assign an isolated ROS domain. It launches actual controller processes in `stamped` and `plain` namespaces, sends handmade laser scans, and checks states and velocity output for both message types. It requires ROS, but neither Gazebo nor a robot nor a bag.
+`CMakeLists.txt` registers the C++ test and the Python launch test when `BUILD_TESTING` is enabled (the usual development configuration). The integration test uses `ament_cmake_ros`'s `run_test_isolated.py` runner to assign an isolated ROS domain. It launches the actual controller in the `stamped` namespace, sends handmade laser scans, and checks state, `TwistStamped` velocity output, frame ID and populated header timestamps. It requires ROS, but neither Gazebo nor a robot nor a bag.
 
-Coverage includes disabled output despite incoming scans, enable waiting for a new scan, straight following, left/right correction, blocked-front turning, wall search, malformed front/all-invalid scans, recovery, old/future header stamps, receipt timeout, stop/re-enable, and process exit codes. Test waits use monotonic deadlines and require stable observations across multiple timer ticks; they do not merely check that a topic exists. Synthetic tests do not validate physical stopping distance or Gazebo model wiring.
+Coverage includes disabled output despite incoming scans, enable waiting for a new scan, straight following, left/right correction, blocked-front turning, wall search, all-NaN and mixed-NaN scans, retained commands on malformed/missing-sector scans, recovery, old/future header stamps, continued publication during scan silence, stop/re-enable with saved-command clearing, and process exit codes. Test waits use monotonic deadlines and require stable observations across multiple timer ticks; they do not merely check that a topic exists. Synthetic tests do not validate physical stopping distance or Gazebo model wiring.
 
-For simulation evidence, separately verify the complete walkthrough: correct topic types, fresh scans, expected states, motion near a wall, turning at an obstacle, stop/re-enable, and watchdog recovery. Record Ubuntu/ROS/Gazebo versions, commands, output, and observations. A rosbag is optional evidence, not a dependency or required input for this wall-following package. Do not copy bag requirements from unrelated project phases into this workflow.
+For simulation evidence, separately verify the complete walkthrough: correct topic types, fresh scans, expected states, motion near a wall, turning at an obstacle, stop/re-enable, held commands during scan silence, and recovery after unusable input. Record Ubuntu/ROS/Gazebo versions, commands, output, and observations. A rosbag is optional evidence, not a dependency or required input for this wall-following package. Do not copy bag requirements from unrelated project phases into this workflow.
 
 ## File map and function inventory
 
@@ -504,14 +495,14 @@ s02-g24-wallfollower/
 | `src/scan_reader.cpp` | Angle-aware filtering and front/minimum, side/median extraction |
 | `include/wall_follower/controller.hpp` | `Controller`, startup `Settings`, and linear/angular `Command` API |
 | `src/controller.cpp` | Settings validation, state decisions, front hysteresis, following and search calculations |
-| `include/wall_follower/wall_follower_node.hpp` | ROS adapter declaration, owned interfaces, watchdog/timer state |
+| `include/wall_follower/wall_follower_node.hpp` | ROS adapter declaration, owned interfaces, enable state and publishing timer |
 | `src/wall_follower_node.cpp` | Parameters, topics, service callbacks, scheduling, and shutdown output |
 | `src/main.cpp` | Executable entry point and ROS context lifecycle |
 | `config/wall_follower.yaml` | Namespace-compatible numerical startup defaults |
 | `launch/wall_follower.launch.py` | Starts this controller alone, with parameters, namespace, and remaps |
 | `scripts/test_core.sh` | Standalone compiler/test runner for the ROS-independent core |
 | `test/test_core.cpp` | C++ assertions/checks against scan processing and steering logic |
-| `test/test_integration.py` | Isolated ROS launch test for stamped and plain output plus shutdown checks |
+| `test/test_integration.py` | Isolated ROS launch test for TwistStamped output plus shutdown checks |
 | `docs/node_design.puml` | Editable manual ROS Node Design Diagram source |
 | `docs/node_design.svg` | Viewable node diagram; not a substitute screenshot from `rqt_graph` |
 | `docs/class_diagram.puml` | Editable simplified UML class relationship diagram source |
@@ -523,11 +514,8 @@ s02-g24-wallfollower/
 | Function | Purpose |
 | --- | --- |
 | `Update(...)` | Replace previous readings, validate metadata, and calculate all three sectors |
-| `ReadSector(...)` | Private static helper: collect valid rays within angular bounds and return minimum or middle value |
+| `ReadSector(...)` | Private static helper: collect usable rays within angular bounds, apply the all-NaN fallback, and return minimum or middle value |
 | `HasValidReadings()` | True only when all three sectors have usable data |
-| `HasValidFrontReading()` | Whether front distance can be used |
-| `HasValidRightReading()` | Whether right distance can be used |
-| `HasValidFrontRightReading()` | Whether diagonal distance can be used |
 | `HasReceivedScan()` | Whether any `Update` has happened, even if that scan was malformed |
 | `FrontDistance()` | Return stored front distance; caller must check validity |
 | `RightDistance()` | Return stored right distance; caller must check validity |
@@ -539,15 +527,15 @@ s02-g24-wallfollower/
 | --- | --- |
 | `Settings::IsValid()` | Check all eight steering values for finiteness and allowed relationships |
 | `Controller(settings)` | Store fixed startup settings and reset the initial state |
-| `CalculateCommand(scan)` | Choose the control state and produce a linear/angular command |
+| `CalculateCommand(scan)` | Calculate and save a command from usable input; otherwise hold the previous command with invalid_scan |
 | `StateName()` | Return the latest diagnostic string |
-| `Reset()` | Clear front hysteresis and restore waiting/invalid-configuration state |
+| `Reset()` | Clear the saved command and front hysteresis; restore waiting/invalid-configuration state |
 | `HasValidSettings()` | Expose settings validity to the ROS adapter |
 | `UpdateFrontBlocked(distance)` | Private helper implementing stop/resume hysteresis |
 | `FollowWall(right, front_right)` | Private distance/heading steering with limited angular speed and forward slowdown |
 | `CurveRightToFindWall()` | Private helper returning nominal forward speed and half-rate right turn |
 
-`Settings` is the eight-value configuration record; `Command` is the two-value output record with zero defaults. Neither needs ROS messages. The reader reports observations; the controller decides movement; the adapter decides whether movement is currently permitted.
+`Settings` is the eight-value configuration record; `Command` is the two-value output record with zero defaults. Neither needs ROS messages. The reader reports observations; the controller decides movement and retains its last usable command; the adapter decides whether movement is currently permitted.
 
 ### ROS adapter functions (`wall_follower_node.hpp` / `wall_follower_node.cpp`)
 
@@ -557,10 +545,10 @@ s02-g24-wallfollower/
 | `ReadDouble(name, value)` | Declare a read-only double and return the supplied/default value |
 | `ReadBool(name, value)` | Declare a read-only boolean and return the supplied/default value |
 | `ReadSettings()` | Gather the controller's eight startup parameters |
-| `OnScan(message)` | Feed laser metadata/ranges to the reader and record steady receipt time |
+| `OnScan(message)` | Replace laser metadata/ranges in the reader and mark that a post-transition scan arrived |
 | `SetEnabled(request, response)` | Validate enabling, reset on transition, reply, and immediately update output |
-| `Update()` | Apply configuration/permission/freshness checks, then calculate and publish a command/state |
-| `Publish(command, state)` | Format selected velocity type and publish both velocity and state |
+| `Update()` | Apply configuration/permission/post-transition-input checks, then calculate and publish a command/state |
+| `Publish(command, state)` | Stamp and publish a TwistStamped command and publish the state |
 | `Run()` | Spin a single-threaded executor with a 100 Hz polling loop; cancel timer and send final zero on exit |
 
 The 100 Hz executor polling rate is not the control publication rate; the 50 ms timer supplies nominal 20 Hz output. Service callbacks can trigger an additional publication. Scheduling is not hard real time.
@@ -570,18 +558,19 @@ The 100 Hz executor polling rate is not the control publication rate; the 50 ms 
 | File / function | Purpose |
 | --- | --- |
 | `src/main.cpp`: `main(argc, argv)` | Initialize the signal-handled default context and separate node context, construct/run the node, then shut both down |
-| `launch/wall_follower.launch.py`: `generate_launch_description()` | Declare nine launch arguments and return a description containing the one controller node |
-| `test/test_integration.py`: `generate_test_description()` | Launch stamped/plain nodes with 0.5 s test watchdogs and signal test readiness |
+| `launch/wall_follower.launch.py`: `generate_launch_description()` | Declare eight launch arguments and return a description containing the one controller node |
+| `test/test_integration.py`: `generate_test_description()` | Launch the stamped controller and signal test readiness |
 | `TestWallFollower.setUp()` | Create an isolated Python context/executor and per-node scan publishers, output subscribers, and service clients; await discovery |
-| Nested `command_callback(...)` | Normalize either message format to a Twist and store observed commands |
+| Nested `command_callback(...)` | Check the stamped header and store the embedded velocity commands |
 | Nested `state_callback(...)` | Store state strings and observation history |
 | `wait_until(...)` | Spin until a condition succeeds or report a bounded timeout |
 | `scan(...)` | Construct a 360-ray synthetic laser message with controlled wall/front values and optional header stamp |
 | `stopped(command)` | Check all six velocity components are approximately zero |
 | `enabled(endpoint, value)` | Call SetBool asynchronously, check acceptance, and clean up an unfinished request |
 | `expect(...)` and nested `matches()` | Optionally stream scans at 10 Hz and require a stable matching state/command |
-| `assert_stays_stopped(...)` | Check every observed command stays zero and the state remains expected over a duration |
-| `test_controller_contract()` and nested `straight(...)` | Run behaviour scenarios for both command formats, including approximately straight default following |
+| `assert_stays_command(...)` | Check every observed command satisfies a predicate and the state remains expected over a duration |
+| `assert_stays_stopped(...)` | Use the duration check with the zero-command predicate |
+| `test_controller_contract()` and nested `straight(...)`, `searching(...)`, `turning(...)` | Run behaviour scenarios for TwistStamped output, including approximately straight default following |
 | `TestControllerShutdown.test_exit_codes(...)` | Verify launched processes' exit codes after shutdown |
 
 ### Core test and shell helper functions
@@ -600,7 +589,7 @@ The test executable contains a `CoreTests` class so its helpers and check counte
 | `TestAnglesAndFiltering()` | Exercise resolutions, wrapped/reversed angles, front minimum and side median |
 | `TestSettings()` | Check defaults and reject invalid tuning values |
 | `TestControl()` | Check steering, obstacle priority, hysteresis, wall search and reset |
-| `TestPartials()` | Check behaviour when only some sectors are available |
+| `TestRetainedCommand()` | Check held velocities and obstacle memory across unusable scans, reset clearing, and normal motion after NaN substitution |
 | `TestGeometricFeedbackLoop()` | Repeatedly apply steering to a simple geometric model and check convergence to a straight wall; this is not Gazebo |
 | Test `main()` | Construct `CoreTests` and return its result |
 | Shell `cleanup()` | Remove only the temporary directory created by that core test invocation |
@@ -620,16 +609,16 @@ The test executable contains a `CoreTests` class so its helpers and check counte
 | Gazebo exists but robot/sensors do not | Wait for model loading; check spawn/bridge errors, `TURTLEBOT3_MODEL`, `/scan`, and `/clock`; this controller launch cannot spawn a robot |
 | State remains `disabled` | Call the actual resolved `set_enabled` service; setting `start_enabled` at runtime is not supported |
 | State remains `waiting_for_scan` | Ensure scans arrive after enabling, topic remapping and QoS are correct, and Gazebo is playing; use `ros2 topic hz /scan` and a best-effort echo |
-| `invalid_scan` | Inspect range/angle metadata and front coverage; all NaNs or unknown front is not usable free space |
-| `partial_scan` / unusually slow motion | Check side/diagonal field of view, sensor mounting and invalid returns; recovery is deliberately capped at 0.01 m/s |
+| `invalid_scan` | Inspect metadata and coverage of all three required sectors; the previous command remains active. Entirely NaN sectors use range_max |
+| Motion continues after scans stop | Expected: there is no scan timeout. Disable through set_enabled to command zero |
 | `searching_wall` in open space | A right wall must be within `wall_lost_distance`; use the standard world with obstacles and a suitable starting position, not an empty world |
-| Commands published but no motion | Inspect the robot subscriber's actual topic/type and QoS with `ros2 topic info --verbose`; restart with the appropriate stamped/plain switch and stop competing publishers |
+| Commands published but no motion | Inspect the robot subscriber's actual topic/type and QoS with `ros2 topic info --verbose`; it must accept TwistStamped. Stop competing publishers |
 | CLI reports more than one topic type | Stop conflicting publishers; inspect endpoints, then run only the matching command format |
 | Service waits indefinitely | Check `ros2 service list -t`, namespace/remap, whether the node is running, and ROS discovery/domain settings |
 | `invalid_configuration` / enable refused | Check finiteness, positive values and ordering constraints, edit startup configuration, and restart |
 | `ros2 param set` rejects a value as read-only | Expected for package parameters; change the YAML and restart, or use SetBool to change running permission |
-| Simulator time reset or old scan header | Old stamps are accepted; check arrival continuity and `/clock` instead of disabling the watchdog |
-| Stamped commands have zero/wrong time | Check `use_sim_time` and `/clock`; the receipt watchdog can work even while ROS time is wrong |
+| Simulator time reset or old scan header | Input stamps are ignored; check `/clock` for outgoing stamped commands and inspect current scan content |
+| Stamped commands have zero/wrong time | Check `use_sim_time` and `/clock`; publication continues on a wall timer even while ROS time is wrong |
 | Works in one terminal but not another | Repeat source commands in the same order and check that ROS domain/discovery settings match |
 | Integration test fails | Read `colcon test-result --verbose` and workspace logs; a local core pass is not a substitute for investigating ROS failures |
 
@@ -650,7 +639,7 @@ Adjust names for your namespace. A reliable scan subscription cannot necessarily
 
 Physical operation is **unverified for this package**. The simulator setup above requires no hardware, and no hardware connection has been made. A person responsible for the robot must perform bringup and supervise any later trial with an accessible stop method. Follow the robot's matching official bringup instructions, not assumptions from a different model or ROS release.
 
-Before enabling, inspect the actual sensor topic and its `sensor_msgs/msg/LaserScan` type, angular convention, coverage, range limits, and QoS. Inspect the base's command subscriber and select stamped/plain output accordingly. Set `use_sim_time:=false`, use appropriate namespaces/remaps and shared ROS discovery settings, and verify the base's own command timeout. Account for sensor position, robot footprint, turning clearance, and real stopping distance when choosing parameters. This simple sector controller does not implement a complete collision envelope or safety system.
+Before enabling, inspect the actual sensor topic and its `sensor_msgs/msg/LaserScan` type, angular convention, coverage, range limits, and QoS. Confirm the base's command subscriber accepts `geometry_msgs/msg/TwistStamped`. Set `use_sim_time:=false`, use appropriate namespaces/remaps and shared ROS discovery settings, and verify the base's own command timeout. Account for sensor position, robot footprint, turning clearance, and real stopping distance when choosing parameters. This simple sector controller does not implement a complete collision envelope or safety system.
 
 Keep `start_enabled:=false` until the responsible operator is ready. Reuse the documented SetBool stop/start interface. Do not run autonomous and teleoperation publishers concurrently on the same command topic. A software stop request is not a physical emergency stop.
 

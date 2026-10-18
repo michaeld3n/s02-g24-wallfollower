@@ -14,7 +14,6 @@ def generate_launch_description():
                                     'config', 'wall_follower.yaml'),
         'use_sim_time': 'false',
         'start_enabled': 'false',
-        'use_stamped_cmd_vel': 'true',
         'namespace': '',
         'scan_topic': 'scan',
         'cmd_vel_topic': 'cmd_vel',
@@ -29,7 +28,7 @@ def generate_launch_description():
         output='screen',
         parameters=[LaunchConfiguration('params_file'), {
             name: ParameterValue(LaunchConfiguration(name), value_type=bool)
-            for name in ('use_sim_time', 'start_enabled', 'use_stamped_cmd_vel')
+            for name in ('use_sim_time', 'start_enabled')
         }],
         remappings=[(topic, LaunchConfiguration(argument)) for topic, argument in (
             ('scan', 'scan_topic'), ('cmd_vel', 'cmd_vel_topic'),

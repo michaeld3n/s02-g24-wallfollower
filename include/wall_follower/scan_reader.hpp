@@ -11,19 +11,21 @@
 
 namespace wall_follower
 {
+// Reduces laser rays to front, right and front-right sector distances.
 class ScanReader
 {
 public:
     // Angles are radians counterclockwise from forward; distances are metres.
-    // Positive infinity denotes clear space up to range_max. Other nonfinite
-    // returns are invalid. Every update replaces all previous sector readings.
+    // Positive infinity and an entirely NaN sector denote range_max.
+    // Missing coverage and other unusable sectors remain invalid.
+    // Every update replaces all previous sector readings.
     void Update(const std::vector<float>& ranges, double angle_min,
                 double angle_increment, double range_min, double range_max);
+    // True only when all three required sectors have usable distances.
     bool HasValidReadings() const;
-    bool HasValidFrontReading() const;
-    bool HasValidRightReading() const;
-    bool HasValidFrontRightReading() const;
     bool HasReceivedScan() const;
+
+    // Distances are usable for steering only when HasValidReadings is true.
     double FrontDistance() const;
     double RightDistance() const;
     double FrontRightDistance() const;

@@ -13,28 +13,31 @@
 #include "wall_follower/controller.hpp"
 #include "wall_follower/scan_reader.hpp"
 #include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
-#include <chrono>
 #include <memory>
 #include <string>
 
 namespace wall_follower
 {
+// Connects scan, velocity and state topics with a runtime enable service.
 class WallFollowerNode : public rclcpp::Node
 {
 public:
     explicit WallFollowerNode(const rclcpp::NodeOptions& options);
+
+    // Dispatch callbacks until shutdown, then request a final zero command.
     void Run();
 
 private:
     Controller::Settings ReadSettings();
     double ReadDouble(const std::string& name, double value);
     bool ReadBool(const std::string& name, bool value);
+    // A scan can arrive while disabled; only post-enable input may drive motion.
     void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr message);
+    // Reset retained motion on value changes and publish the new state immediately.
     void SetEnabled(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                     std::shared_ptr<std_srvs::srv::SetBool::Response> response);
     void Update();
@@ -43,18 +46,17 @@ private:
     ScanReader mScan;
     Controller mController;
     bool mEnabled;
-    const bool mStamped;
-    const double mScanTimeout;
+    // At least one scan has arrived since the latest enable transition.
     bool mHaveScan = false;
-    std::chrono::steady_clock::time_point mReceipt;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr mScanSubscription;
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr mVelocity;
-    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr mStampedVelocity;
+    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr mVelocity;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mState;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr mEnableService;
     rclcpp::TimerBase::SharedPtr mTimer;
 
+    static constexpr int VelocityQueueDepth = 10;
     static constexpr int UpdateMilliseconds = 50;
+    static constexpr int ShutdownAckWaitMilliseconds = 200;
     static constexpr double ExecutorFrequency = 100.0;
 };
 }

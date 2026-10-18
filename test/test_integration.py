@@ -11,7 +11,7 @@ import launch_testing.actions
 import launch_testing.asserts
 import pytest
 import rclpy
-from geometry_msgs.msg import Twist, TwistStamped
+from geometry_msgs.msg import TwistStamped
 from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import (
@@ -27,26 +27,19 @@ from std_srvs.srv import SetBool
 
 @pytest.mark.launch_test
 def generate_test_description():
-    processes = [
-        launch_ros.actions.Node(
-            package='wall_follower',
-            executable='wall_follower_node',
-            namespace=namespace,
-            parameters=[{
-                'use_stamped_cmd_vel': stamped,
-                'start_enabled': False,
-                'scan_timeout': 0.5,
-            }],
-            output='screen',
-        )
-        for namespace, stamped in [('stamped', True), ('plain', False)]
-    ]
+    process = launch_ros.actions.Node(
+        package='wall_follower',
+        executable='wall_follower_node',
+        namespace='stamped',
+        parameters=[{'start_enabled': False}],
+        output='screen',
+    )
     return (
         launch.LaunchDescription([
-            *processes,
+            process,
             launch_testing.actions.ReadyToTest(),
         ]),
-        {'controller_processes': processes},
+        {'controller_processes': [process]},
     )
 
 
@@ -70,12 +63,14 @@ class TestWallFollower(unittest.TestCase):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        for namespace, message_type in [('stamped', TwistStamped), ('plain', Twist)]:
+        for namespace in ('stamped',):
             endpoint = {'command': None, 'state': None, 'commands': [], 'states': []}
             self.endpoints[namespace] = endpoint
 
             def command_callback(message, endpoint=endpoint):
-                twist = message.twist if isinstance(message, TwistStamped) else message
+                self.assertEqual(message.header.frame_id, 'base_link')
+                self.assertGreater(message.header.stamp.sec, 0)
+                twist = message.twist
                 endpoint['command'] = twist
                 endpoint['commands'].append(twist)
 
@@ -86,7 +81,7 @@ class TestWallFollower(unittest.TestCase):
             endpoint['publisher'] = self.node.create_publisher(
                 LaserScan, f'/{namespace}/scan', qos_profile_sensor_data)
             endpoint['command_subscription'] = self.node.create_subscription(
-                message_type, f'/{namespace}/cmd_vel', command_callback, command_qos)
+                TwistStamped, f'/{namespace}/cmd_vel', command_callback, command_qos)
             endpoint['state_subscription'] = self.node.create_subscription(
                 String, f'/{namespace}/state', state_callback, state_qos)
             endpoint['service'] = self.node.create_client(
@@ -100,7 +95,7 @@ class TestWallFollower(unittest.TestCase):
                 for e in self.endpoints.values()
             ),
             timeout=15.0,
-            description='discovery of both controllers and their services',
+            description='discovery of the stamped controller and its service',
         )
 
     def wait_until(self, predicate, *, timeout=5.0, description):
@@ -114,7 +109,7 @@ class TestWallFollower(unittest.TestCase):
 
     @staticmethod
     def scan(*, wall=0.25, front=math.inf, stamp=None):
-        """360 one-degree rays; infinity means observed free space, NaN unknown."""
+        """360 one-degree rays with configurable wall and front returns."""
         message = LaserScan()
         message.header.frame_id = 'laser'
         if stamp is not None:
@@ -180,8 +175,11 @@ class TestWallFollower(unittest.TestCase):
         self.wait_until(matches, timeout=timeout, description=f'{states} and command')
 
     def assert_stays_stopped(self, endpoint, state, *, duration=0.7, scan=None):
-        # Discard earlier transition messages, then inspect every received command.
-        self.expect(endpoint, state, self.stopped, scan=scan)
+        self.assert_stays_command(endpoint, state, self.stopped, duration=duration, scan=scan)
+
+    def assert_stays_command(self, endpoint, state, predicate, *, duration=0.7, scan=None):
+        """Discard transition messages, then check every command over the interval."""
+        self.expect(endpoint, state, predicate, scan=scan)
         endpoint['commands'].clear()
         endpoint['states'].clear()
         deadline = time.monotonic() + duration
@@ -194,7 +192,7 @@ class TestWallFollower(unittest.TestCase):
             self.executor.spin_once(timeout_sec=0.02)
         self.assertGreater(len(endpoint['commands']), 0)
         self.assertGreater(len(endpoint['states']), 0)
-        self.assertTrue(all(self.stopped(c) for c in endpoint['commands']))
+        self.assertTrue(all(predicate(c) for c in endpoint['commands']))
         self.assertEqual(set(endpoint['states']), {state})
 
     def test_controller_contract(self):
@@ -203,7 +201,7 @@ class TestWallFollower(unittest.TestCase):
                     and abs(command.angular.z) < 0.08)
 
         for namespace, endpoint in self.endpoints.items():
-            with self.subTest(output_format=namespace):
+            with self.subTest(namespace=namespace):
                 wall_scan = self.scan()
                 self.assertAlmostEqual(wall_scan.ranges[90], 0.25)
                 self.assertAlmostEqual(wall_scan.ranges[135], 0.25 * math.sqrt(2))
@@ -233,32 +231,74 @@ class TestWallFollower(unittest.TestCase):
                     endpoint, 'searching_wall', lambda c: c.angular.z < -0.02,
                     scan=self.scan(wall=None),
                 )
+                def searching(command):
+                    return (abs(command.linear.x - 0.10) < 0.01
+                            and abs(command.angular.z + 0.325) < 0.02)
+
+                all_nan = self.scan()
+                all_nan.ranges = [math.nan] * 360
+                self.expect(endpoint, 'searching_wall', searching, scan=all_nan)
+                self.expect(endpoint, 'following_wall', straight,
+                            scan=self.scan(front=math.nan))
+                mixed_nan = self.scan()
+                mixed_nan.ranges[90] = math.nan
+                mixed_nan.ranges[135] = math.nan
+                mixed_nan.ranges[180] = math.nan
+                self.expect(endpoint, 'following_wall', straight, scan=mixed_nan)
+
                 invalid = self.scan()
-                invalid.ranges = [math.nan] * 360
-                self.expect(endpoint, 'invalid_scan', self.stopped, scan=invalid)
-                self.expect(endpoint, 'following_wall', straight, scan=wall_scan)
-                self.expect(
-                    endpoint, {'partial_scan', 'invalid_scan'}, self.stopped,
-                    scan=self.scan(front=math.nan),
-                )
+                invalid.ranges = [-math.inf] * 360
+                malformed = self.scan()
+                malformed.angle_increment = 0.0
+                missing_sides = self.scan(front=0.15)
+                missing_sides.angle_min = 0.0
+                missing_sides.angle_max = 20 * missing_sides.angle_increment
+                missing_sides.ranges = [0.15] * 21
+                missing_right = self.scan(front=0.15)
+                for index in range(80, 101):
+                    missing_right.ranges[index] = -math.inf
+                empty = self.scan()
+                empty.ranges = []
+                unusable = [invalid, malformed, missing_sides, missing_right, empty]
+
+                # Reject a whole unusable scan, even if its front contains an obstacle.
+                for bad_scan in unusable:
+                    self.assert_stays_command(endpoint, 'invalid_scan', straight,
+                                              duration=0.2, scan=bad_scan)
                 self.expect(endpoint, 'following_wall', straight, scan=wall_scan)
 
-                # Sensor timestamps must not control the steady receipt-time watchdog.
+                def turning(command):
+                    return (abs(command.linear.x) < 1e-6
+                            and abs(command.angular.z - 0.65) < 0.02)
+
+                self.expect(endpoint, 'turning_left', turning, scan=self.scan(front=0.15))
+                self.assert_stays_command(endpoint, 'invalid_scan', turning,
+                                          duration=0.2, scan=invalid)
+                self.expect(endpoint, 'turning_left', turning, scan=self.scan(front=0.30))
+                self.expect(endpoint, 'following_wall', straight, scan=wall_scan)
+
+                # Header timestamps do not gate movement.
                 old_scan = self.scan()
                 old_scan.header.stamp.sec = 1
                 self.expect(endpoint, 'following_wall', straight, scan=old_scan)
                 future_scan = self.scan(stamp=self.node.get_clock().now().to_msg())
                 future_scan.header.stamp.sec += 3600
                 self.expect(endpoint, 'following_wall', straight, scan=future_scan)
-                self.expect(endpoint, 'waiting_for_scan', self.stopped, timeout=2.0)
-                self.expect(endpoint, 'following_wall', straight, scan=wall_scan)
+                # Silence longer than the former default must preserve command and state.
+                self.assert_stays_command(endpoint, 'following_wall', straight, duration=1.3)
+                self.expect(endpoint, 'turning_left', turning, scan=self.scan(front=0.15))
 
                 self.enabled(endpoint, False)
                 self.expect(endpoint, 'disabled', self.stopped, timeout=1.0)
                 self.assert_stays_stopped(endpoint, 'disabled', scan=wall_scan)
                 self.enabled(endpoint, True)
                 self.assert_stays_stopped(endpoint, 'waiting_for_scan')
-                self.expect(endpoint, 'following_wall', straight, scan=wall_scan)
+                # Neither old forward motion nor old turning may survive a restart.
+                self.assert_stays_stopped(endpoint, 'invalid_scan', scan=invalid)
+                self.expect(endpoint, 'following_wall', straight,
+                            scan=self.scan(front=0.30))
+                self.enabled(endpoint, True)
+                self.assert_stays_command(endpoint, 'following_wall', straight, duration=0.2)
                 self.enabled(endpoint, False)
                 self.expect(endpoint, 'disabled', self.stopped)
 

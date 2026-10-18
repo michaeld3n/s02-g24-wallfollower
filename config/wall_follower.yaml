@@ -8,4 +8,3 @@
     wall_lost_distance: 0.90
     distance_gain: 2.0
     heading_gain: 1.2
-    scan_timeout: 1.0

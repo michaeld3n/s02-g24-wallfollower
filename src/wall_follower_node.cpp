@@ -10,7 +10,7 @@
 
 #include "wall_follower/wall_follower_node.hpp"
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
-#include <cmath>
+#include <chrono>
 #include <functional>
 
 namespace wall_follower
@@ -18,18 +18,10 @@ namespace wall_follower
 WallFollowerNode::WallFollowerNode(const rclcpp::NodeOptions& options)
     : Node("wall_follower", options),
       mController(ReadSettings()),
-      mEnabled(ReadBool("start_enabled", false)),
-      mStamped(ReadBool("use_stamped_cmd_vel", true)),
-      mScanTimeout(ReadDouble("scan_timeout", 1.0))
+      mEnabled(ReadBool("start_enabled", false))
 {
-    if (mStamped)
-    {
-        mStampedVelocity = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 10);
-    }
-    else
-    {
-        mVelocity = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
-    }
+    mVelocity = create_publisher<geometry_msgs::msg::TwistStamped>(
+        "cmd_vel", VelocityQueueDepth);
     mState = create_publisher<std_msgs::msg::String>(
         "state", rclcpp::QoS(1).reliable().transient_local());
     mScanSubscription = create_subscription<sensor_msgs::msg::LaserScan>(
@@ -73,40 +65,41 @@ Controller::Settings WallFollowerNode::ReadSettings()
 
 void WallFollowerNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr message)
 {
+    // Header timestamps do not gate command generation.
     mScan.Update(message->ranges, message->angle_min, message->angle_increment,
                  message->range_min, message->range_max);
-    mReceipt = std::chrono::steady_clock::now();
     mHaveScan = true;
-    // Deliberately ignore header timestamps: paused/reset simulation clocks are valid.
 }
 
 void WallFollowerNode::SetEnabled(
     const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
     std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
-    if (request->data && (!mController.HasValidSettings()
-        || !std::isfinite(mScanTimeout) || mScanTimeout <= 0.0))
+    if (request->data && !mController.HasValidSettings())
     {
         response->success = false;
         response->message = "Invalid configuration; correct startup parameters and restart";
-        return;
     }
-    if (mEnabled != request->data)
+    else
     {
-        mController.Reset();
-        mHaveScan = false;
+        if (mEnabled != request->data)
+        {
+            // Clear retained motion and require a post-transition scan.
+            mController.Reset();
+            mHaveScan = false;
+        }
+        mEnabled = request->data;
+        response->success = true;
+        response->message = mEnabled ? "Enabled" : "Disabled; zero velocity sent";
+        Update();
     }
-    mEnabled = request->data;
-    response->success = true;
-    response->message = mEnabled ? "Enabled" : "Disabled; zero velocity sent";
-    Update();
 }
 
 void WallFollowerNode::Update()
 {
     Controller::Command command;
     std::string state;
-    if (!mController.HasValidSettings() || !std::isfinite(mScanTimeout) || mScanTimeout <= 0.0)
+    if (!mController.HasValidSettings())
     {
         state = "invalid_configuration";
     }
@@ -114,8 +107,7 @@ void WallFollowerNode::Update()
     {
         state = "disabled";
     }
-    else if (!mHaveScan || std::chrono::duration<double>(
-                 std::chrono::steady_clock::now() - mReceipt).count() > mScanTimeout)
+    else if (!mHaveScan)
     {
         state = "waiting_for_scan";
         mController.Reset();
@@ -130,21 +122,12 @@ void WallFollowerNode::Update()
 
 void WallFollowerNode::Publish(const Controller::Command& command, const std::string& state)
 {
-    geometry_msgs::msg::Twist velocity;
-    velocity.linear.x = command.Linear;
-    velocity.angular.z = command.Angular;
-    if (mStamped)
-    {
-        geometry_msgs::msg::TwistStamped message;
-        message.header.stamp = now();
-        message.header.frame_id = "base_link";
-        message.twist = velocity;
-        mStampedVelocity->publish(message);
-    }
-    else
-    {
-        mVelocity->publish(velocity);
-    }
+    geometry_msgs::msg::TwistStamped velocity;
+    velocity.header.stamp = now();
+    velocity.header.frame_id = "base_link";
+    velocity.twist.linear.x = command.Linear;
+    velocity.twist.angular.z = command.Angular;
+    mVelocity->publish(velocity);
     std_msgs::msg::String message;
     message.data = state;
     mState->publish(message);
@@ -166,14 +149,8 @@ void WallFollowerNode::Run()
     if (rclcpp::ok(options.context))
     {
         Publish(Controller::Command{}, "disabled");
-        if (mStamped)
-        {
-            mStampedVelocity->wait_for_all_acked(std::chrono::milliseconds(200));
-        }
-        else
-        {
-            mVelocity->wait_for_all_acked(std::chrono::milliseconds(200));
-        }
+        mVelocity->wait_for_all_acked(
+            std::chrono::milliseconds(ShutdownAckWaitMilliseconds));
     }
     executor.remove_node(get_node_base_interface());
 }

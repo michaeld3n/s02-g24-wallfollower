@@ -11,9 +11,11 @@
 
 namespace wall_follower
 {
+// Produces right-wall steering and retains the command from the last usable scan.
 class Controller
 {
 public:
+    // Startup tuning values; IsValid checks their numerical relationships.
     struct Settings
     {
         double WallDistance = 0.25;
@@ -26,27 +28,32 @@ public:
         double HeadingGain = 1.2;
         bool IsValid() const;
     };
+    // Forward speed in metres/second and left-positive turn rate in radians/second.
     struct Command
     {
         double Linear = 0.0;
         double Angular = 0.0;
     };
     explicit Controller(const Settings& settings);
+
+    // An unusable scan holds the previous command and reports invalid_scan.
     Command CalculateCommand(const ScanReader& scan);
     const char* StateName() const;
-    // Clear hysteresis; the caller must supply a scan again before driving.
+
+    // Clear the saved command and front-obstacle hysteresis on an enable transition.
     void Reset();
     bool HasValidSettings() const;
 
 private:
-    static constexpr double CornerTurnFraction = 0.5;
+    static constexpr double SearchTurnFraction = 0.5;
     static constexpr double MaxSteeringSlowdown = 0.5;
-    static constexpr double PartialScanSpeed = 0.01;
 
     void UpdateFrontBlocked(double front_distance);
     Command FollowWall(double right_distance, double front_right_distance) const;
     Command CurveRightToFindWall() const;
     const Settings mSettings;
+    // Remains zero until a usable scan is processed after reset.
+    Command mLastCommand;
     bool mFrontBlocked = false;
     const char* mState = "waiting_for_scan";
 };

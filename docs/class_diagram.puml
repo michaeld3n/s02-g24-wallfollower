@@ -15,6 +15,6 @@ WallFollowerNode *-- ScanReader
 WallFollowerNode *-- Controller
 Controller *-- Settings
 Controller --> ScanReader : reads
-Controller ..> Command : returns
+Controller *-- Command : retains
 WallFollowerNode ..> Command : publishes
 @enduml

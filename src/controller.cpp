@@ -22,63 +22,62 @@ bool Controller::Settings::IsValid() const
         && WallLostDistance > WallDistance && DistanceGain > 0.0 && HeadingGain >= 0.0;
 }
 
-Controller::Controller(const Settings& settings) : mSettings(settings) { Reset(); }
-bool Controller::HasValidSettings() const { return mSettings.IsValid(); }
-const char* Controller::StateName() const { return mState; }
+Controller::Controller(const Settings& settings) : mSettings(settings)
+{
+    Reset();
+}
+
+bool Controller::HasValidSettings() const
+{
+    return mSettings.IsValid();
+}
+
+const char* Controller::StateName() const
+{
+    return mState;
+}
+
 void Controller::Reset()
 {
+    mLastCommand = Command{};
     mFrontBlocked = false;
     mState = HasValidSettings() ? "waiting_for_scan" : "invalid_configuration";
 }
 
 Controller::Command Controller::CalculateCommand(const ScanReader& scan)
 {
-    if (!HasValidSettings())
+    Command result;
+    if (!HasValidSettings() || !scan.HasReceivedScan())
     {
         Reset();
-        return Command{};
     }
-    if (!scan.HasReceivedScan() || !scan.HasValidFrontReading())
+    else if (!scan.HasValidReadings())
     {
-        mFrontBlocked = false;
-        mState = scan.HasReceivedScan() ? "invalid_scan" : "waiting_for_scan";
-        return Command{};
+        // Reject the whole scan without changing the saved command or obstacle latch.
+        mState = "invalid_scan";
+        result = mLastCommand;
     }
-    UpdateFrontBlocked(scan.FrontDistance());
-    if (mFrontBlocked)
+    else
     {
-        mState = "turning_left";
-        Command result;
-        result.Angular = mSettings.TurnSpeed;
-        return result;
-    }
-    if (!scan.HasValidReadings())
-    {
-        mState = "partial_scan";
-        Command result = CurveRightToFindWall();
-        if (scan.HasValidRightReading()
-            && scan.RightDistance() <= mSettings.WallLostDistance)
+        UpdateFrontBlocked(scan.FrontDistance());
+        if (mFrontBlocked)
         {
-            // A missing diagonal must not invent a heading measurement.
-            result = FollowWall(scan.RightDistance(), mSettings.WallLostDistance);
+            mState = "turning_left";
+            result.Angular = mSettings.TurnSpeed;
         }
-        else if (scan.HasValidFrontRightReading()
-                 && scan.FrontRightDistance() < mSettings.FrontStopDistance)
+        else if (scan.RightDistance() > mSettings.WallLostDistance)
         {
-            // Do not curve toward a nearby diagonal obstacle when right is unknown.
-            result.Linear = 0.0;
-            result.Angular = mSettings.TurnSpeed * CornerTurnFraction;
+            mState = "searching_wall";
+            result = CurveRightToFindWall();
         }
-        result.Linear = std::min(result.Linear, PartialScanSpeed);
-        return result;
+        else
+        {
+            mState = "following_wall";
+            result = FollowWall(scan.RightDistance(), scan.FrontRightDistance());
+        }
+        mLastCommand = result;
     }
-    if (scan.RightDistance() > mSettings.WallLostDistance)
-    {
-        mState = "searching_wall";
-        return CurveRightToFindWall();
-    }
-    mState = "following_wall";
-    return FollowWall(scan.RightDistance(), scan.FrontRightDistance());
+    return result;
 }
 
 void Controller::UpdateFrontBlocked(double front_distance)
@@ -91,7 +90,7 @@ Controller::Command Controller::CurveRightToFindWall() const
 {
     Command result;
     result.Linear = mSettings.ForwardSpeed;
-    result.Angular = -mSettings.TurnSpeed * CornerTurnFraction;
+    result.Angular = -mSettings.TurnSpeed * SearchTurnFraction;
     return result;
 }
 

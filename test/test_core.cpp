@@ -19,6 +19,7 @@ namespace
 {
 using wall_follower::Controller;
 using wall_follower::ScanReader;
+// Exercises scan filtering, retained commands and closed-loop wall steering.
 class CoreTests
 {
 public:
@@ -41,7 +42,7 @@ private:
     void TestAnglesAndFiltering();
     void TestSettings();
     void TestControl();
-    void TestPartials();
+    void TestRetainedCommand();
     void TestGeometricFeedbackLoop();
 };
 
@@ -54,11 +55,17 @@ void CoreTests::Check(bool condition, const char* description)
     }
 }
 bool CoreTests::Near(double actual, double expected, double tolerance)
-{ return std::abs(actual - expected) <= tolerance; }
+{
+    return std::abs(actual - expected) <= tolerance;
+}
 void CoreTests::State(const Controller& controller, const char* expected)
-{ Check(std::string(controller.StateName()) == expected, expected); }
+{
+    Check(std::string(controller.StateName()) == expected, expected);
+}
 void CoreTests::Stopped(const Controller::Command& command)
-{ Check(command.Linear == 0.0 && command.Angular == 0.0, "must stop completely"); }
+{
+    Check(command.Linear == 0.0 && command.Angular == 0.0, "must stop completely");
+}
 
 // Three isolated beams exercise control independently of sector filtering.
 ScanReader CoreTests::Scan(float front, float right, float diagonal)
@@ -88,20 +95,24 @@ void CoreTests::TestScanValidation()
     {
         scan = Scan();
         scan.Update({1, 1, 1}, metadata.Start, metadata.Step, metadata.Min, metadata.Max);
-        Check(scan.HasReceivedScan() && !scan.HasValidFrontReading()
-              && !scan.HasValidRightReading() && !scan.HasValidFrontRightReading(),
+        Check(scan.HasReceivedScan() && !scan.HasValidReadings(),
               "bad metadata clears every sector");
         Check(scan.FrontDistance() == 0.0 && scan.RightDistance() == 0.0
               && scan.FrontRightDistance() == 0.0, "no stale distances");
     }
     scan.Update({}, 0, 1, 0, 10);
     Check(scan.HasReceivedScan() && !scan.HasValidReadings(), "empty received scan");
-    for (float invalid : {NaN, -Infinity, -1.0F, 0.0F, 11.0F})
+    for (float invalid : {-Infinity, -1.0F, 0.0F, 11.0F})
     {
         scan = Scan(invalid, invalid, invalid);
-        Check(!scan.HasValidFrontReading() && !scan.HasValidRightReading()
-              && !scan.HasValidFrontRightReading(), "invalid returns rejected");
+        Check(!scan.HasValidReadings() && scan.FrontDistance() == 0.0
+              && scan.RightDistance() == 0.0 && scan.FrontRightDistance() == 0.0,
+              "invalid returns rejected");
     }
+    scan = Scan(NaN, NaN, NaN);
+    Check(scan.HasValidReadings() && scan.FrontDistance() == 10.0
+          && scan.RightDistance() == 10.0 && scan.FrontRightDistance() == 10.0,
+          "all-NaN sectors use declared range maximum");
     scan = Scan(Infinity, Infinity, Infinity);
     Check(scan.HasValidReadings() && scan.FrontDistance() == 10.0
           && scan.RightDistance() == 10.0, "positive infinity means clear space");
@@ -148,7 +159,28 @@ void CoreTests::TestAnglesAndFiltering()
     Check(Near(scan.FrontDistance(), 0.2), "front selects nearest obstacle");
     scan.Update({0.25F, 0.05F, 0.25F}, -Pi / 2 - Pi / 180, Pi / 180, 0.01, 10);
     Check(Near(scan.RightDistance(), 0.25), "side median rejects outlier");
-    Check(!scan.HasValidFrontReading(), "limited field of view stays partial");
+    Check(!scan.HasValidReadings() && scan.FrontDistance() == 0.0,
+          "limited field of view remains unknown");
+
+    // NaNs never dilute the front minimum or side median when usable rays exist.
+    scan.Update({NaN, 0.4F, 0.6F}, -Pi / 180, Pi / 180, 0.01, 10);
+    Check(Near(scan.FrontDistance(), 0.4), "front ignores mixed NaNs");
+    scan.Update({NaN, 0.2F, 0.4F, 0.6F, NaN}, -Pi / 2 - 2 * Pi / 180,
+                Pi / 180, 0.01, 10);
+    Check(Near(scan.RightDistance(), 0.4), "side ignores mixed NaNs");
+    scan.Update({NaN, NaN, NaN}, -Pi / 180, Pi / 180, 0.01, 10);
+    Check(scan.FrontDistance() == 10.0 && scan.RightDistance() == 0.0
+          && !scan.HasValidReadings(), "NaNs do not fill absent angular coverage");
+    for (float invalid : {-Infinity, -1.0F, 0.0F, 11.0F})
+    {
+        scan.Update({NaN, invalid, NaN}, -Pi / 180, Pi / 180, 0.01, 10);
+        Check(scan.FrontDistance() == 0.0, "NaN fallback requires every beam to be NaN");
+    }
+    scan.Update({NaN, Infinity, NaN}, -Pi / 180, Pi / 180, 0.01, 10);
+    Check(scan.FrontDistance() == 10.0, "mixed infinity and NaNs remain usable");
+    scan.Update({0, 0, 0}, -Pi / 2, Pi / 4, 0, 10);
+    Check(scan.HasValidReadings() && scan.FrontDistance() == 0.0,
+          "zero is valid when declared range minimum permits it");
 }
 
 void CoreTests::TestSettings()
@@ -232,41 +264,63 @@ void CoreTests::TestControl()
     State(hysteresis, "following_wall");
 }
 
-void CoreTests::TestPartials()
+void CoreTests::TestRetainedCommand()
 {
     Controller controller(Controller::Settings{});
-    for (const auto& scan : {Scan(NaN, NaN, NaN), Scan(NaN), Scan(-Infinity)})
+    ScanReader empty;
+    empty.Update({}, 0, Pi / 180, 0.01, 10);
+    ScanReader limited;
+    limited.Update({0.15F}, 0, Pi / 180, 0.01, 10);
+    ScanReader malformed;
+    malformed.Update({1, 1, 1}, -Pi / 2, 0, 0.01, 10);
+    const std::vector<ScanReader> unusable = {
+        Scan(-Infinity), Scan(2, -Infinity), Scan(2, 0.25F, -Infinity),
+        Scan(-Infinity, -Infinity, -Infinity), empty, limited, malformed
+    };
+    for (const auto& scan : unusable)
     {
-        controller.CalculateCommand(Scan(0.2F));
         Stopped(controller.CalculateCommand(scan));
         State(controller, "invalid_scan");
-        controller.CalculateCommand(Scan(0.3F));
-        State(controller, "following_wall");
     }
-    controller.CalculateCommand(Scan(0.2F));
-    Stopped(controller.CalculateCommand(ScanReader{}));
-    controller.CalculateCommand(Scan(0.3F));
-    State(controller, "following_wall");
-    for (const auto& scan : {Scan(2, NaN, NaN), Scan(2, NaN), Scan(2, 0.25F, NaN)})
+
+    // Hold straight, corrective, search and turning commands across bad input.
+    for (const auto& valid : {Scan(), Scan(2, 0.15F), Scan(2, 0.45F),
+                             Scan(Infinity, Infinity, Infinity), Scan(0.15F)})
     {
-        const auto command = controller.CalculateCommand(scan);
-        State(controller, "partial_scan");
-        Check(command.Linear >= 0 && command.Linear <= 0.01, "partial speed capped");
+        const auto previous = controller.CalculateCommand(valid);
+        for (const auto& scan : unusable)
+        {
+            const auto held = controller.CalculateCommand(scan);
+            Check(Near(held.Linear, previous.Linear) && Near(held.Angular, previous.Angular),
+                  "unusable scans retain both velocity components");
+            State(controller, "invalid_scan");
+        }
     }
-    Check(Near(controller.CalculateCommand(Scan(2, 0.25F, NaN)).Angular, 0),
-          "missing diagonal does not invent heading");
-    Check(controller.CalculateCommand(Scan(2, 0.15F, NaN)).Angular > 0,
-          "distance-only partial steers away from close wall");
-    auto command = controller.CalculateCommand(Scan(2, NaN, 0.15F));
-    Check(command.Linear == 0 && command.Angular > 0, "unknown right avoids close diagonal");
-    controller.CalculateCommand(Scan(0.2F, NaN, NaN));
+    controller.CalculateCommand(Scan(0.30F));
     State(controller, "turning_left");
-    controller.CalculateCommand(Scan(0.3F, NaN, NaN));
-    State(controller, "turning_left");
-    controller.CalculateCommand(Scan(0.5F, NaN, NaN));
-    State(controller, "partial_scan");
     controller.CalculateCommand(Scan());
     State(controller, "following_wall");
+
+    // Reset must discard retained motion as well as obstacle hysteresis.
+    controller.CalculateCommand(Scan(0.15F));
+    controller.Reset();
+    State(controller, "waiting_for_scan");
+    Stopped(controller.CalculateCommand(malformed));
+    State(controller, "invalid_scan");
+    controller.CalculateCommand(Scan(0.30F));
+    State(controller, "following_wall");
+    Stopped(controller.CalculateCommand(ScanReader{}));
+    State(controller, "waiting_for_scan");
+    Stopped(controller.CalculateCommand(malformed));
+
+    const auto searching = controller.CalculateCommand(Scan(NaN, NaN, NaN));
+    State(controller, "searching_wall");
+    Check(Near(searching.Linear, 0.1) && Near(searching.Angular, -0.325),
+          "all-NaN scans search at normal speed");
+    controller.CalculateCommand(Scan(2, 0.25F, NaN));
+    State(controller, "following_wall");
+    controller.CalculateCommand(Scan(0.15F, NaN, NaN));
+    State(controller, "turning_left");
 }
 
 void CoreTests::TestGeometricFeedbackLoop()
@@ -311,22 +365,23 @@ void CoreTests::TestGeometricFeedbackLoop()
 int CoreTests::Run()
 {
     Checks = 0;
+    int result = EXIT_FAILURE;
     try
     {
         TestScanValidation();
         TestAnglesAndFiltering();
         TestSettings();
         TestControl();
-        TestPartials();
+        TestRetainedCommand();
         TestGeometricFeedbackLoop();
         std::cout << "PASS: " << Checks << " core checks (6 test groups)\n";
-        return EXIT_SUCCESS;
+        result = EXIT_SUCCESS;
     }
     catch (const std::exception& error)
     {
         std::cerr << "FAIL after " << Checks << " checks: " << error.what() << '\n';
-        return EXIT_FAILURE;
     }
+    return result;
 }
 }  // namespace
 
