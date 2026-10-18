@@ -1,4 +1,6 @@
-// The ROS interface for the wall follower
+// MTRX3760 2026 Project 2: Package Deal
+// File: wall_follower_node.hpp
+// Author(s): Cody, Marzuq, Royce, Hajin, Stephen
 //
 // This node owns the scan reader and controller. Its callbacks handle scans,
 // start/stop requests and regular output updates. The publishers send the

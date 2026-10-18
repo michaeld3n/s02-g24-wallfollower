@@ -1,4 +1,6 @@
-// Turning laser rays into sector distances
+// MTRX3760 2026 Project 2: Package Deal
+// File: scan_reader.cpp
+// Author(s): Cody, Marzuq, Royce
 //
 // The reader groups rays by angle and finds the front minimum and side
 // medians. It ignores unusable individual returns and uses the sensor's

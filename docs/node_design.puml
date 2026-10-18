@@ -13,8 +13,11 @@ left to right direction
 usecase "ros_gz_bridge::RosGzBridge" as Bridge
 usecase "WallFollowerNode" as Follower
 usecase "rclpy.node.Node" as Observer
+usecase "robot_state_publisher::RobotStatePublisher" as RobotState
 Bridge --> Follower : laser_ranges
 Bridge --> Follower : simulation_time
 Follower --> Bridge : requested_motion
 Follower --> Observer : follower_state
+Bridge --> RobotState : joint_positions
+Bridge --> RobotState : simulation_time
 @enduml

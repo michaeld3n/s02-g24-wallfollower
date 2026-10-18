@@ -1,4 +1,6 @@
-// Reading the front and right side of a laser scan
+// MTRX3760 2026 Project 2: Package Deal
+// File: scan_reader.hpp
+// Author(s): Cody, Marzuq, Royce
 //
 // This class stores the front, right and front-right sector distances.
 // Each update replaces the previous readings, and the controller can check

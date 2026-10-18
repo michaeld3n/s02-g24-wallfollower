@@ -119,4 +119,4 @@ The isolated [integration test](test/test_integration.py) checks velocity output
 
 ## Attribution
 
-Adapted from [Project 1](https://github.com/Cod-Luo/MTRX3760-project-1), revision `05df1f5`, by Cody, royce, Marz and Paekinator. ROS adapter lineage: ROBOTIS CO., LTD., copyright 2019, Taehun Lim (Darby) and Ryan Shim. Package licence: [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0).
+Adapted from [Project 1](https://github.com/Cod-Luo/MTRX3760-project-1), revision `05df1f5`. Code contributors: Cody, Marzuq, Royce, Hajin and Stephen; documentation: Michael. ROS adapter lineage: ROBOTIS CO., LTD., copyright 2019, Taehun Lim (Darby) and Ryan Shim. Package licence: [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0).

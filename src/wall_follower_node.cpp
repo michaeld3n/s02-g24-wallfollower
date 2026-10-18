@@ -1,4 +1,6 @@
-// Connecting the wall follower to ROS
+// MTRX3760 2026 Project 2: Package Deal
+// File: wall_follower_node.cpp
+// Author(s): Cody, Marzuq, Royce, Hajin, Stephen
 //
 // The node receives laser scans, passes them to the reader and publishes
 // stamped velocity commands and state messages. A service enables or stops
@@ -50,16 +52,16 @@ bool WallFollowerNode::ReadBool(const std::string& name, bool value)
 
 Controller::Settings WallFollowerNode::ReadSettings()
 {
-    Controller::Settings settings;
-    settings.WallDistance = ReadDouble("wall_distance", settings.WallDistance);
-    settings.ForwardSpeed = ReadDouble("forward_speed", settings.ForwardSpeed);
-    settings.TurnSpeed = ReadDouble("turn_speed", settings.TurnSpeed);
-    settings.FrontStopDistance = ReadDouble("front_stop_distance", settings.FrontStopDistance);
-    settings.FrontResumeDistance = ReadDouble("front_resume_distance", settings.FrontResumeDistance);
-    settings.WallLostDistance = ReadDouble("wall_lost_distance", settings.WallLostDistance);
-    settings.DistanceGain = ReadDouble("distance_gain", settings.DistanceGain);
-    settings.HeadingGain = ReadDouble("heading_gain", settings.HeadingGain);
-    return settings;
+    const Controller::Settings defaults;
+    return Controller::Settings(
+        ReadDouble("wall_distance", defaults.WallDistance()),
+        ReadDouble("forward_speed", defaults.ForwardSpeed()),
+        ReadDouble("turn_speed", defaults.TurnSpeed()),
+        ReadDouble("front_stop_distance", defaults.FrontStopDistance()),
+        ReadDouble("front_resume_distance", defaults.FrontResumeDistance()),
+        ReadDouble("wall_lost_distance", defaults.WallLostDistance()),
+        ReadDouble("distance_gain", defaults.DistanceGain()),
+        ReadDouble("heading_gain", defaults.HeadingGain()));
 }
 
 void WallFollowerNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr message)
@@ -124,8 +126,8 @@ void WallFollowerNode::Publish(const Controller::Command& command, const std::st
     geometry_msgs::msg::TwistStamped velocity;
     velocity.header.stamp = now();
     velocity.header.frame_id = "base_link";
-    velocity.twist.linear.x = command.Linear;
-    velocity.twist.angular.z = command.Angular;
+    velocity.twist.linear.x = command.Linear();
+    velocity.twist.angular.z = command.Angular();
     mVelocity->publish(velocity);
     std_msgs::msg::String message;
     message.data = state;

@@ -1,4 +1,6 @@
-// The wall-following controller
+// MTRX3760 2026 Project 2: Package Deal
+// File: controller.hpp
+// Author(s): Cody, Marzuq, Royce
 //
 // This class defines the steering settings and velocity command used by the
 // wall follower. It keeps the previous command and obstacle-turn state so
@@ -16,23 +18,44 @@ class Controller
 {
 public:
     // Startup settings stay fixed while the controller is running.
-    struct Settings
+    class Settings
     {
-        double WallDistance = 0.25;
-        double ForwardSpeed = 0.10;
-        double TurnSpeed = 0.65;
-        double FrontStopDistance = 0.25;
-        double FrontResumeDistance = 0.35;
-        double WallLostDistance = 0.90;
-        double DistanceGain = 2.0;
-        double HeadingGain = 1.2;
+    public:
+        Settings() = default;
+        Settings(double wall_distance, double forward_speed, double turn_speed,
+                 double front_stop_distance, double front_resume_distance,
+                 double wall_lost_distance, double distance_gain, double heading_gain);
+        double WallDistance() const;
+        double ForwardSpeed() const;
+        double TurnSpeed() const;
+        double FrontStopDistance() const;
+        double FrontResumeDistance() const;
+        double WallLostDistance() const;
+        double DistanceGain() const;
+        double HeadingGain() const;
         bool IsValid() const;
+
+    private:
+        double mWallDistance = 0.25;
+        double mForwardSpeed = 0.10;
+        double mTurnSpeed = 0.65;
+        double mFrontStopDistance = 0.25;
+        double mFrontResumeDistance = 0.35;
+        double mWallLostDistance = 0.90;
+        double mDistanceGain = 2.0;
+        double mHeadingGain = 1.2;
     };
     // Forward speed is in m/s. Turning is in rad/s, with positive values turning left.
-    struct Command
+    class Command
     {
-        double Linear = 0.0;
-        double Angular = 0.0;
+    public:
+        Command(double linear = 0.0, double angular = 0.0);
+        double Linear() const;
+        double Angular() const;
+
+    private:
+        double mLinear;
+        double mAngular;
     };
     explicit Controller(const Settings& settings);
 

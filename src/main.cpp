@@ -1,4 +1,6 @@
-// Starting and stopping the wall follower
+// MTRX3760 2026 Project 2: Package Deal
+// File: main.cpp
+// Author(s): Marzuq, Royce
 //
 // This program creates the ROS node and runs its callbacks. A separate ROS
 // context lets the node send a final zero velocity command when Ctrl+C is
